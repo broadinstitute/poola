@@ -369,16 +369,16 @@ def get_empirical_gene_pval(pseudogene_lfcs, zscore_col, condition_col, gene_zsc
     strongest_p_val=np.min([ha_less,ha_greater])
     return strongest_p_val
 
-def aggregate_gene_lfcs_empirical(lfcs, pseudogene_lfcs, gene_col, condition_col='condition', average_cols=None, zscore_cols=None):
+def aggregate_gene_lfcs_empirical(lfcs, gene_col, condition_col='condition', pseudogene_lfcs=None, average_cols=None, zscore_cols=None):
     """
     Aggregate log-fold changes at the gene level
     
     lfcs: dataframe, scores with annotations |
-    pseudogene_lfcs: dataframe, pseudogene scores with pseudogene annotations |
+    pseudogene_lfcs: dataframe, pseudogene scores with pseudogene annotations --> will only calculate p-values and FDRs if provided |
     gene_col: str, column which uniquely identifies a gene |
     condition_col: str, column which uniquely identifies experimental conditions |
     average_cols: list of str, columns to average
-    zscore_cols: list of str, columns to z-score --> will also calculate p-value and FDR for each column
+    zscore_cols: list of str, columns to z-score --> will also calculate p-value and FDR for each column if pseudogene_lfcs is provided
     returns: dataframe, lfcs aggregated at the gene level
     """
     agg_mean = {col: 'mean' for col in average_cols}
@@ -390,26 +390,28 @@ def aggregate_gene_lfcs_empirical(lfcs, pseudogene_lfcs, gene_col, condition_col
                 .rename({condition_col: 'n_guides'}, axis=1)
                 .reset_index())
 
-    agg_pseudogene_lfcs = (pseudogene_lfcs
-                           .groupby([condition_col, gene_col])
-                           .agg(aggs)
-                           .rename({condition_col: 'n_guides'}, axis=1)
-                           .reset_index())
+    if pseudogene_lfcs is not None:
+        agg_pseudogene_lfcs = (pseudogene_lfcs
+                               .groupby([condition_col, gene_col])
+                               .agg(aggs)
+                               .rename({condition_col: 'n_guides'}, axis=1)
+                               .reset_index())
 
     
     for col in zscore_cols:
         agg_lfcs[col] = agg_lfcs[col]/np.sqrt(agg_lfcs['n_guides'])
-        agg_pseudogene_lfcs[col] = agg_pseudogene_lfcs[col]/np.sqrt(agg_pseudogene_lfcs['n_guides'])
 
-        agg_lfcs[col + '_p_value'] = agg_lfcs.apply(lambda x: get_empirical_gene_pval(pseudogene_lfcs,
-                                                                                      col,
-                                                                                      condition_col,
-                                                                                      x[col],
-                                                                                      x[condition_col]), axis=1)
-    
-        agg_lfcs[col + '_fdr'] = (agg_lfcs.groupby(condition_col)
-                                  [col + '_p_value']
-                                  .transform(lambda x: multipletests(x, method='fdr_bh')[1]))
+        if pseudogene_lfcs is not None:
+            agg_pseudogene_lfcs[col] = agg_pseudogene_lfcs[col]/np.sqrt(agg_pseudogene_lfcs['n_guides'])
+            agg_lfcs[col + '_p_value'] = agg_lfcs.apply(lambda x: get_empirical_gene_pval(pseudogene_lfcs,
+                                                                                          col,
+                                                                                          condition_col,
+                                                                                          x[col],
+                                                                                          x[condition_col]), axis=1)
+        
+            agg_lfcs[col + '_fdr'] = (agg_lfcs.groupby(condition_col)
+                                      [col + '_p_value']
+                                      .transform(lambda x: multipletests(x, method='fdr_bh')[1]))
     return agg_lfcs
 
 def get_hypergeometric_pval(df, name):
@@ -466,7 +468,7 @@ def aggregate_gene_lfcs_hypergeometric(lfcs, gene_col, condition_col='condition'
         agg_lfcs = pd.merge(agg_lfcs, col_hyp_pval, on=[condition_col, gene_col])
     return agg_lfcs
 
-# %% ../00_core.ipynb 62
+# %% ../00_core.ipynb 63
 def get_roc_aucs(lfcs, tp_genes, fp_genes, gene_col, score_col=None, condition_col=None, condition_list=None, 
                  pos_control_direction=-1):
     """

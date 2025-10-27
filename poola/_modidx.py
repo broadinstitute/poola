@@ -2,8 +2,8 @@
 
 d = { 'settings': { 'branch': 'master',
                 'doc_baseurl': '/poola/',
-                'doc_host': 'https://gpp-rnd.github.io',
-                'git_url': 'https://github.com/gpp-rnd/poola/tree/master/',
+                'doc_host': 'https://broadinstitute.github.io',
+                'git_url': 'https://github.com/broadinstitute/poola/tree/master/',
                 'lib_path': 'poola'},
   'syms': { 'poola.core': { 'poola.core.aggregate_gene_lfcs': ('core.html#aggregate_gene_lfcs', 'poola/core.py'),
                             'poola.core.aggregate_gene_lfcs_empirical': ('core.html#aggregate_gene_lfcs_empirical', 'poola/core.py'),
