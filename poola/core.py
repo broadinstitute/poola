@@ -5,8 +5,9 @@
 # %% auto 0
 __all__ = ['lognorm', 'lognorm_columns', 'filter_pdna', 'calculate_lfcs', 'get_condition', 'average_replicate_lfcs',
            'group_pseudogenes', 'get_annotated_lfcs', 'get_control_lfcs', 'get_neg_ctl_z_score', 'scale_lfcs',
-           'annotate_guide_lfcs', 'aggregate_gene_lfcs', 'get_empirical_gene_pval', 'aggregate_gene_lfcs_empirical',
-           'get_hypergeometric_pval', 'apply_parallel', 'aggregate_gene_lfcs_hypergeometric', 'get_roc_aucs']
+           'annotate_guide_lfcs', 'aggregate_gene_lfcs', 'get_null_distributions', 'get_empirical_gene_pval',
+           'aggregate_gene_lfcs_empirical', 'get_hypergeometric_pval', 'apply_parallel',
+           'aggregate_gene_lfcs_hypergeometric', 'get_roc_aucs']
 
 # %% ../00_core.ipynb 2
 import numpy as np
@@ -351,24 +352,36 @@ def aggregate_gene_lfcs(lfcs, gene_col, condition_col='condition', average_cols=
                                   .transform(lambda x: multipletests(x, method='fdr_bh')[1]))
     return agg_lfcs
 
-def get_empirical_gene_pval(pseudogene_lfcs, zscore_col, condition_col, gene_zscore, condition):
+def get_null_distributions(pseudogene_lfcs, zscore_col, condition_col):
+    """
+    Creates a mapping from conditions to probability density functions representing pseudogene z-score distributions
+    pseudogene_lfcs: dataframe, pseudogene scores with pseudogene annotations |
+    zscore_col: str, name of column with gene-level z-scores |
+    condition_col: str, name of column which uniquely identifies experimental conditions |
+    returns: dict, null distributions by condition
+    """
+    null_distributions = {}
+    for condition in pseudogene_lfcs[condition_col].unique():
+        control_pseudogene_zscores = pseudogene_lfcs.loc[pseudogene_lfcs[condition_col] == condition, zscore_col]
+        if control_pseudogene_zscores.isna().all() or len(control_pseudogene_zscores) == 0 or control_pseudogene_zscores.nunique() == 1:
+            return None
+        null_distributions[condition] = scipy.stats.gaussian_kde(control_pseudogene_zscores.tolist())
+    return null_distributions
+
+def get_empirical_gene_pval(gene_zscore, null_distribution):
     """
     Calculates the p-value for a gene using distribution of pseudogene z-scores
-    
-    pseudogene_lfcs: dataframe, pseudogene scores with pseudogene annotations |
-    zscore_col: str, column with gene-level z-scores |
-    condition_col: str, column which uniquely identifies experimental conditions |
     gene_zscore: float, gene-level z-score |
-    condition: str, unique identifier for experimental condition for which to calculate p-value with respect to |
+    null_distribution: gaussian_kde, scipy distribution of pseudogene z-scores |
     returns: float, gene p-value
     """
-    control_pseudogene_zscores = pseudogene_lfcs.loc[pseudogene_lfcs[condition_col] == condition, zscore_col].tolist()
-    kde=scipy.stats.gaussian_kde(control_pseudogene_zscores)
-    ha_less=kde.integrate_box_1d(-np.inf, gene_zscore)
-    ha_greater=kde.integrate_box_1d(gene_zscore, np.inf)
-    strongest_p_val=np.min([ha_less,ha_greater])
+    if null_distribution is None:
+        return np.nan
+    ha_less = null_distribution.integrate_box_1d(-np.inf, gene_zscore)
+    ha_greater = null_distribution.integrate_box_1d(gene_zscore, np.inf)
+    strongest_p_val = np.min([ha_less, ha_greater])
     return strongest_p_val
-
+    
 def aggregate_gene_lfcs_empirical(lfcs, gene_col, condition_col='condition', pseudogene_lfcs=None, average_cols=None, zscore_cols=None):
     """
     Aggregate log-fold changes at the gene level
@@ -377,8 +390,8 @@ def aggregate_gene_lfcs_empirical(lfcs, gene_col, condition_col='condition', pse
     pseudogene_lfcs: dataframe, pseudogene scores with pseudogene annotations --> will only calculate p-values and FDRs if provided |
     gene_col: str, column which uniquely identifies a gene |
     condition_col: str, column which uniquely identifies experimental conditions |
-    average_cols: list of str, columns to average
-    zscore_cols: list of str, columns to z-score --> will also calculate p-value and FDR for each column if pseudogene_lfcs is provided
+    average_cols: list of str, columns to average |
+    zscore_cols: list of str, columns to z-score --> will also calculate p-value and FDR for each column if pseudogene_lfcs is provided |
     returns: dataframe, lfcs aggregated at the gene level
     """
     agg_mean = {col: 'mean' for col in average_cols}
@@ -389,30 +402,29 @@ def aggregate_gene_lfcs_empirical(lfcs, gene_col, condition_col='condition', pse
                 .agg(aggs)
                 .rename({condition_col: 'n_guides'}, axis=1)
                 .reset_index())
-
     if pseudogene_lfcs is not None:
         agg_pseudogene_lfcs = (pseudogene_lfcs
                                .groupby([condition_col, gene_col])
                                .agg(aggs)
                                .rename({condition_col: 'n_guides'}, axis=1)
                                .reset_index())
-
     
     for col in zscore_cols:
         agg_lfcs[col] = agg_lfcs[col]/np.sqrt(agg_lfcs['n_guides'])
-
         if pseudogene_lfcs is not None:
             agg_pseudogene_lfcs[col] = agg_pseudogene_lfcs[col]/np.sqrt(agg_pseudogene_lfcs['n_guides'])
-            agg_lfcs[col + '_p_value'] = agg_lfcs.apply(lambda x: get_empirical_gene_pval(pseudogene_lfcs,
-                                                                                          col,
-                                                                                          condition_col,
-                                                                                          x[col],
-                                                                                          x[condition_col]), axis=1)
+            null_distribution_map = get_null_distributions(pseudogene_lfcs, col, condition_col)
+            
+            agg_lfcs[col + '_p_value'] = agg_lfcs.groupby(condition_col)[col].transform(
+                lambda condition: condition.map(lambda z: get_empirical_gene_pval(z, null_distribution_map[condition.name]))
+            )
         
             agg_lfcs[col + '_fdr'] = (agg_lfcs.groupby(condition_col)
                                       [col + '_p_value']
                                       .transform(lambda x: multipletests(x, method='fdr_bh')[1]))
     return agg_lfcs
+
+
 
 def get_hypergeometric_pval(df, name):
     """Calculates the p-value for a gene using the hypergeometric test
