@@ -211,7 +211,8 @@ def get_control_lfcs(annotated_lfcs, controls, gene_col):
         control_lfcs = annotated_lfcs[annotated_lfcs[gene_col].isin(controls)].copy()
     else:
         raise ValueError('Must supply a string, list-like object, or None for controls')
-    return control_lfcs
+    control_lfcs_unique = control_lfcs.drop_duplicates([col for col in control_lfcs.columns if col != gene_col])
+    return control_lfcs_unique
 
 
 def get_neg_ctl_z_score(lfcs, negative_controls, gene_col, condition_col, lfc_col):
